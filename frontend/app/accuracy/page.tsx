@@ -1,0 +1,1 @@
+export default function Accuracy(){return <main><h1>Projection accuracy</h1><div className="panel">Weekly MAE comparison becomes available after immutable morning projections and completed-game results are stored.</div></main>}
