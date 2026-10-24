@@ -74,7 +74,7 @@ def pending_finished_games(db: Session, season: int, limit: int = 100) -> list[t
         SELECT g.id,g.api_id FROM games g
         LEFT JOIN ingestion_state i ON i.game_id=g.id
         WHERE g.season=:season
-          AND lower(g.status) IN ('finished','final','after overtime')
+          AND (lower(g.status) IN ('finished','final','after overtime') OR upper(g.status) IN ('FT','AOT'))
           AND (i.game_id IS NULL OR i.status IN ('pending','failed')
                OR (i.status='claimed' AND i.claimed_until < now()))
         ORDER BY g.date_utc DESC LIMIT :limit
