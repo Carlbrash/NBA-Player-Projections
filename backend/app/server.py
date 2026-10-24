@@ -100,3 +100,13 @@ def player_rows_for_game(game_id:int):
             return game_player_rows(db,game_id)
         except LookupError:
             raise HTTPException(404,"Game not found")
+
+from .lineups import get_game_lineups
+
+@app.get("/api/games/{game_id}/lineups")
+def lineups_for_game(game_id:int):
+    with session_factory(Settings())() as db:
+        try:
+            return get_game_lineups(db,game_id)
+        except LookupError:
+            raise HTTPException(404,"Game not found")
