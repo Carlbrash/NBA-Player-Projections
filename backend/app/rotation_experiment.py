@@ -1,6 +1,6 @@
 """Experimental minutes-aware rotation model; baseline remains unchanged.
 
-Input is historical player game appearances with is_starter from VERIFIED
+Input is CURRENT-SEASON player game appearances with is_starter from VERIFIED
 game_starters only. Does not infer starters from box-score order.
 """
 from collections import defaultdict
@@ -14,15 +14,15 @@ def weighted_mean(values, half_life=10):
     weights = [0.5 ** ((len(values) - 1 - i) / half_life) for i in range(len(values))]
     return sum(v*w for v,w in zip(values, weights)) / sum(weights)
 
-def predict_rotation(history, available_ids, confirmed_starter_ids=None):
+def predict_rotation(history, available_ids, confirmed_starter_ids=None, season=None):
     """Return 240-minute allocation and team PTS estimate.
 
-    history: iterable of dicts {game_id, player_id, minutes, pts,
+    history: iterable of CURRENT-SEASON dicts {season, game_id, player_id, minutes, pts,
       is_starter: bool, played: bool, date_order: int}.
     Missing is_starter must be None (unknown), never assumed False.
     Historical games sorted by date_order; most recent has greatest value.
     """
-    available_ids = set(available_ids)
+    if season is None:\n        raise ValueError("Current season is required; never mix prior seasons")\n    if any(row.get("season") != season for row in history):\n        raise ValueError("Input contains games outside selected season")\n    available_ids = set(available_ids)
     starters = set(confirmed_starter_ids or [])
     grouped = defaultdict(list)
     for row in history:
