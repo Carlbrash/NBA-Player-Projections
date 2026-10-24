@@ -25,8 +25,9 @@ def test_absent_starter_redistributes_without_manual_weight():
 
 def test_missing_rotation_cannot_invent_240_minutes():
     r=predict_rotation(history(),[1,2,3], [1,2,3],season=2026)
-    assert r["team_points"] is None
-    assert r["warning"]
+    assert r["team_points"] is not None
+    assert r["partial"] is True
+    assert r["sample_games"] == 12
 
 def test_rejects_previous_season_data():
     from pytest import raises
