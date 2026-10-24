@@ -28,7 +28,7 @@ jobs:
           python-version: '3.11'
       - run: pip install -r backend/requirements-dev.txt
       - run: |
-          for f in sql/schema.sql sql/002_ingestion.sql sql/003_snapshots.sql sql/004_backfill_status.sql; do
+          for f in sql/schema.sql sql/002_ingestion.sql sql/003_snapshots.sql sql/004_backfill_status.sql sql/005_schedule_days.sql; do
             PGPASSWORD=nba_test psql -h localhost -U nba -d nba_test -v ON_ERROR_STOP=1 -f "$f"
           done
       - run: cd backend && pytest -q
