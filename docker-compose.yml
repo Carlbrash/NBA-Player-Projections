@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: nba
+      POSTGRES_USER: nba
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - nba_data:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+      - ./sql/002_ingestion.sql:/docker-entrypoint-initdb.d/002-ingestion.sql:ro
+      - ./sql/003_snapshots.sql:/docker-entrypoint-initdb.d/003-snapshots.sql:ro
+      - ./sql/004_backfill_status.sql:/docker-entrypoint-initdb.d/004-backfill.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U nba -d nba"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://nba:${POSTGRES_PASSWORD}@db:5432/nba
+      API_NBA_KEY: ${API_NBA_KEY:?Set API_NBA_KEY}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["8000:8000"]
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    depends_on: [backend]
+    ports: ["3000:3000"]
+volumes:
+  nba_data:
