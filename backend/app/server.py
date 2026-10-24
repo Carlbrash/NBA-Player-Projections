@@ -79,3 +79,14 @@ def projections(day:date=Query(default_factory=date.today)):
           WHERE (g.date_utc AT TIME ZONE 'UTC')::date=CAST(:day AS date)
           ORDER BY g.date_utc,pl.name
         """),{"day":day.isoformat()}).mappings().all()]
+
+from .screenshot import router as screenshot_router
+app.include_router(screenshot_router)
+
+@app.get("/api/status")
+def status():
+    from datetime import datetime,timezone
+    today=datetime.now(timezone.utc).date()
+    with session_factory(Settings())() as db:
+        used=db.execute(text("SELECT calls_used FROM api_call_budget WHERE utc_date=:d"),{"d":today}).scalar_one_or_none() or 0
+        return {"utc_date":str(today),"calls_used":used,"remaining":max(0,90-used)}
