@@ -1,89 +1,136 @@
-"""Experimental minutes-aware rotation model; baseline remains unchanged.
-
-Input is CURRENT-SEASON player game appearances with is_starter from VERIFIED
-game_starters only. Does not infer starters from box-score order.
-"""
+"""Opt-in current-season rotation model. Does not modify baseline projections."""
 from collections import defaultdict
-from math import exp
+from math import isfinite
 
+STATS = ("pts", "reb", "ast", "fg3m")
 TEAM_MINUTES = 240.0
+MIN_SAMPLE = 5.0
+OUT_THRESHOLD = 10.0
 
-def weighted_mean(values, half_life=10):
+def _weighted(values):
     if not values:
-        return None
-    weights = [0.5 ** ((len(values) - 1 - i) / half_life) for i in range(len(values))]
-    return sum(v*w for v,w in zip(values, weights)) / sum(weights)
+        return 0.0
+    weights = [0.5 ** ((len(values)-1-i)/10) for i in range(len(values))]
+    return sum(v*w for v,w in zip(values, weights))/sum(weights)
 
-def predict_rotation(history, available_ids, confirmed_starter_ids=None, season=None):
-    """Return 240-minute allocation and team PTS estimate.
-
-    history: iterable of CURRENT-SEASON dicts {season, game_id, player_id, minutes, pts,
-      is_starter: bool, played: bool, date_order: int}.
-    Missing is_starter must be None (unknown), never assumed False.
-    Historical games sorted by date_order; most recent has greatest value.
-    """
-    if season is None:\n        raise ValueError("Current season is required; never mix prior seasons")\n    if any(row.get("season") != season for row in history):\n        raise ValueError("Input contains games outside selected season")\n    available_ids = set(available_ids)
-    starters = set(confirmed_starter_ids or [])
-    grouped = defaultdict(list)
-    for row in history:
-        if row.get("minutes") is None or row.get("pts") is None:
-            continue
-        grouped[row["player_id"]].append(row)
-    predictions = []
-    for player_id in sorted(available_ids):
-        rows = sorted(grouped.get(player_id, []), key=lambda r:(r["date_order"],r["game_id"]))
-        if not rows:
-            continue
-        # Include zero-minute DNP in minutes history only if explicitly recorded.
-        minutes = weighted_mean([float(r["minutes"]) for r in rows])
-        # Estimate player scoring rate from weighted aggregate points/minutes,
-        # not the unstable average of individual game ratios.
-        weights = [0.5 ** ((len(rows)-1-i)/10) for i in range(len(rows))]
-        weighted_pts = sum(float(r["pts"])*w for r,w in zip(rows,weights))
-        weighted_min = sum(float(r["minutes"])*w for r,w in zip(rows,weights))
-        rate = weighted_pts / weighted_min if weighted_min > 0 else 0.0
-        # Starter-conditioned minutes use verified starter appearances only.
-        if player_id in starters:
-            starts = [r for r in rows if r.get("is_starter") is True]
-            if starts:
-                minutes = weighted_mean([float(r["minutes"]) for r in starts])
-        else:
-            bench = [r for r in rows if r.get("is_starter") is False]
-            if bench:
-                minutes = weighted_mean([float(r["minutes"]) for r in bench])
-        predictions.append({"player_id":player_id,"expected_minutes":max(0.0,minutes or 0.0),
-                            "points_per_minute":rate})
-    if not predictions:
-        return {"minutes":{}, "points":{}, "team_points":None, "coverage":0,
-                "sample_games":0, "partial":True}
-    # Rescale rotation minutes to NBA regulation total; 0-48 minutes/player.
-    # Iterative water filling prevents one player exceeding 48.
-    remaining = TEAM_MINUTES
-    active = list(predictions)
-    allocation = {r["player_id"]:0.0 for r in predictions}
-    while active and remaining > 1e-9:
-        denom = sum(r["expected_minutes"] for r in active)
+def _allocate(weights, fixed=None):
+    fixed = fixed or {}
+    if any(not isfinite(v) or v < 0 or v > 48 for v in fixed.values()):
+        raise ValueError("Fixed minutes must be between 0 and 48")
+    remaining = TEAM_MINUTES-sum(fixed.values())
+    if remaining < -1e-7:
+        raise ValueError("Fixed minutes exceed team total")
+    output = dict(fixed)
+    pool = {k:max(0.0,v) for k,v in weights.items() if k not in fixed}
+    while pool and remaining > 1e-9:
+        denom = sum(pool.values())
         if denom <= 0:
             break
-        capped = [r for r in active if remaining*r["expected_minutes"]/denom >= 48]
+        capped = [k for k,v in pool.items() if remaining*v/denom >= 48]
         if not capped:
-            for r in active:
-                allocation[r["player_id"]] = remaining*r["expected_minutes"]/denom
+            output.update({k:remaining*v/denom for k,v in pool.items()})
             remaining = 0
             break
-        for r in capped:
-            allocation[r["player_id"]] = 48.0
+        for k in capped:
+            output[k] = 48.0
             remaining -= 48.0
-        active = [r for r in active if r not in capped]
-    if remaining > 1e-6:
-        # Show current-season evidence as-is; do not extrapolate a short
-        # rotation to a fictitious 240-minute team total.
-        observed = {r["player_id"]:r["expected_minutes"] for r in predictions}
-        points = {r["player_id"]:observed[r["player_id"]]*r["points_per_minute"] for r in predictions}
-        return {"minutes":observed,"points":points,"team_points":sum(points.values()),
-                "coverage":len(predictions),"partial":True,
-                "sample_games":len(set(r["game_id"] for r in history))}
-    points = {r["player_id"]:allocation[r["player_id"]]*r["points_per_minute"] for r in predictions}
-    return {"minutes":allocation,"points":points,
-            "team_points":sum(points.values()),"coverage":len(predictions),
-            "partial":False,"sample_games":len(set(r["game_id"] for r in history))}
+            del pool[k]
+    for k in pool:
+        output.setdefault(k,0.0)
+    return output, remaining
+
+def predict_rotation(history, available_ids, confirmed_starter_ids=None, season=None,
+                     out_ids=None, fixed_minutes=None, position_by_player=None):
+    """history: current-season pre-tipoff dict rows including game_id,
+    date_order, player_id, minutes, pts, reb, ast, fg3m, is_starter.
+    fixed_minutes is NEW TOTAL minutes for up to two bench players.
+    """
+    if season is None:
+        raise ValueError("Current season is required")
+    history = list(history)
+    if any(r.get("season") != season for r in history):
+        raise ValueError("Input contains games outside selected season")
+    if any(r.get("minutes") is not None and
+           (not isfinite(float(r["minutes"])) or float(r["minutes"]) < 0)
+           for r in history):
+        raise ValueError("Invalid minutes")
+    all_available = set(available_ids)
+    out = set(out_ids or ())
+    available = all_available-out
+    starters = set(confirmed_starter_ids or ())
+    fixed = {int(k):float(v) for k,v in (fixed_minutes or {}).items()}
+    if len(fixed)>2:
+        raise ValueError("At most two replacement players")
+    if not set(fixed)<=available:
+        raise ValueError("Replacement must be available")
+    if set(fixed)&starters:
+        raise ValueError("Existing starters cannot be replacements")
+    grouped = defaultdict(list)
+    for row in history:
+        if row.get("minutes") is not None:
+            grouped[row["player_id"]].append(row)
+    for rows in grouped.values():
+        rows.sort(key=lambda r:(r["date_order"],r["game_id"]))
+    def aggregate(rows,stat):
+        w=[0.5**((len(rows)-1-i)/10) for i in range(len(rows))]
+        denom=sum(float(r["minutes"])*x for r,x in zip(rows,w))
+        return sum(float(r.get(stat,0) or 0)*x for r,x in zip(rows,w))/denom if denom else 0.0
+    rates={}
+    for pid in available:
+        rows=grouped.get(pid,[])
+        if not rows:
+            continue
+        own_minutes=sum(float(r["minutes"]) for r in rows)
+        peers=[other for other in available if other!=pid and grouped.get(other)
+               and sum(float(x["minutes"]) for x in grouped[other])>=MIN_SAMPLE]
+        if position_by_player and position_by_player.get(pid):
+            same=[other for other in peers if position_by_player.get(other)==position_by_player[pid]]
+            if same:
+                peers=same
+        peer_rows=[r for other in peers for r in grouped[other]]
+        rates[pid]={}
+        for stat in STATS:
+            if own_minutes<MIN_SAMPLE and peer_rows:
+                denom=sum(float(r["minutes"]) for r in peer_rows)
+                rate=sum(float(r.get(stat,0) or 0) for r in peer_rows)/denom if denom else 0.0
+            else:
+                rate=aggregate(rows,stat)
+            rates[pid][stat]=rate
+    weights={}
+    for pid in available:
+        rows=grouped.get(pid,[])
+        if not rows:
+            continue
+        selected=[r for r in rows if r.get("is_starter") is (pid in starters)]
+        weights[pid]=_weighted([float(r["minutes"]) for r in (selected or rows)])
+    material_out=[]
+    for pid in out:
+        played=[r for r in grouped.get(pid,[]) if float(r["minutes"])>0]
+        avg=sum(float(r["minutes"]) for r in played)/len(played) if played else 0
+        if avg>=OUT_THRESHOLD:
+            material_out.append(pid)
+    if fixed and not material_out:
+        raise ValueError("Manual replacement requires OUT with >=10 avg MIN")
+    if out and not material_out:
+        baseline_weights=dict(weights)
+        for pid in out&all_available:
+            rows=grouped.get(pid,[])
+            if rows:
+                baseline_weights[pid]=_weighted([float(r["minutes"]) for r in rows])
+        before,_=_allocate(baseline_weights)
+        allocation={pid:mins for pid,mins in before.items() if pid not in out}
+        gap=TEAM_MINUTES-sum(allocation.values())
+    else:
+        allocation,gap=_allocate(weights,fixed)
+    players={}
+    for pid,minutes in allocation.items():
+        stats={s:minutes*rates.get(pid,{}).get(s,0.0) for s in STATS}
+        stats["pra"]=stats["pts"]+stats["reb"]+stats["ast"]
+        sample=sum(float(r["minutes"]) for r in grouped.get(pid,[]))
+        players[pid]={"minutes":minutes,**stats,"sample_minutes":sample,"smoothed":sample<MIN_SAMPLE}
+    totals={s:sum(row[s] for row in players.values()) for s in (*STATS,"pra")}
+    return {"players":players,"minutes":allocation,"points":{pid:r["pts"] for pid,r in players.items()},
+            "team_points":totals["pts"],"team_totals":totals,
+            "allocated_minutes":sum(allocation.values()),"remaining_minutes":gap,
+            "partial":gap>1e-6,"material_out":sorted(material_out),
+            "sample_games":len({r["game_id"] for r in history})}
