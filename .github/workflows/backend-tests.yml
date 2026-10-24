@@ -1,0 +1,34 @@
+name: Backend Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: nba
+          POSTGRES_PASSWORD: nba_test
+          POSTGRES_DB: nba_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U nba -d nba_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://nba:nba_test@localhost:5432/nba_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r backend/requirements-dev.txt
+      - run: |
+          for f in sql/schema.sql sql/002_ingestion.sql sql/003_snapshots.sql sql/004_backfill_status.sql; do
+            PGPASSWORD=nba_test psql -h localhost -U nba -d nba_test -v ON_ERROR_STOP=1 -f "$f"
+          done
+      - run: cd backend && pytest -q
