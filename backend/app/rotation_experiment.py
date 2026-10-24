@@ -54,7 +54,8 @@ def predict_rotation(history, available_ids, confirmed_starter_ids=None, season=
         predictions.append({"player_id":player_id,"expected_minutes":max(0.0,minutes or 0.0),
                             "points_per_minute":rate})
     if not predictions:
-        return {"minutes":{}, "points":{}, "team_points":None, "coverage":0}
+        return {"minutes":{}, "points":{}, "team_points":None, "coverage":0,
+                "sample_games":0, "partial":True}
     # Rescale rotation minutes to NBA regulation total; 0-48 minutes/player.
     # Iterative water filling prevents one player exceeding 48.
     remaining = TEAM_MINUTES
@@ -75,8 +76,14 @@ def predict_rotation(history, available_ids, confirmed_starter_ids=None, season=
             remaining -= 48.0
         active = [r for r in active if r not in capped]
     if remaining > 1e-6:
-        return {"minutes":allocation,"points":{},"team_points":None,
-                "coverage":len(predictions),"warning":"Insufficient rotation depth for 240 minutes"}
+        # Show current-season evidence as-is; do not extrapolate a short
+        # rotation to a fictitious 240-minute team total.
+        observed = {r["player_id"]:r["expected_minutes"] for r in predictions}
+        points = {r["player_id"]:observed[r["player_id"]]*r["points_per_minute"] for r in predictions}
+        return {"minutes":observed,"points":points,"team_points":sum(points.values()),
+                "coverage":len(predictions),"partial":True,
+                "sample_games":len(set(r["game_id"] for r in history))}
     points = {r["player_id"]:allocation[r["player_id"]]*r["points_per_minute"] for r in predictions}
     return {"minutes":allocation,"points":points,
-            "team_points":sum(points.values()),"coverage":len(predictions)}
+            "team_points":sum(points.values()),"coverage":len(predictions),
+            "partial":False,"sample_games":len(set(r["game_id"] for r in history))}
