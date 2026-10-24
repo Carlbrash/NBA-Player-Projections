@@ -90,3 +90,13 @@ def status():
     with session_factory(Settings())() as db:
         used=db.execute(text("SELECT calls_used FROM api_call_budget WHERE utc_date=:d"),{"d":today}).scalar_one_or_none() or 0
         return {"utc_date":str(today),"calls_used":used,"remaining":max(0,90-used)}
+
+from .player_rows import game_player_rows
+
+@app.get("/api/games/{game_id}/player-rows")
+def player_rows_for_game(game_id:int):
+    with session_factory(Settings())() as db:
+        try:
+            return game_player_rows(db,game_id)
+        except LookupError:
+            raise HTTPException(404,"Game not found")
