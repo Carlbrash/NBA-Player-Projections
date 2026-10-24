@@ -1,0 +1,1 @@
+export default function Upload(){return <main><h1>Box-score upload</h1><div className="panel">Vision extraction and confirmation workflow is not enabled yet. No screenshots will be saved without review.</div></main>}
