@@ -1,0 +1,1 @@
+GitHub Actions run on pushes and pull requests. They do not start the daily ingestion. An external scheduler must invoke the backend at 08:00 and 10:00 Europe/Athens after staging validation. Never store API_NBA_KEY in repository files.
