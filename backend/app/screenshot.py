@@ -9,6 +9,7 @@ from sqlalchemy import text
 from .config import Settings
 from .database import session_factory
 from .persist import normalized_name
+from .vision import extract_boxscore, VisionError
 
 router=APIRouter(prefix="/api/screenshots",tags=["screenshots"])
 TEMP=Path("/tmp/nba-screenshot-previews")
@@ -39,13 +40,24 @@ async def preview(file:UploadFile=File(...),game_id:int=Form(...),x_admin_token:
         raise HTTPException(400,"PNG or JPG only")
     data=await file.read(MAX_BYTES+1)
     if len(data)>MAX_BYTES:raise HTTPException(413,"Image too large")
-    # Extraction provider is intentionally not fabricated. Return an editable
-    # preview object for manually entering or pasting reviewed JSON rows.
+    try:
+        extracted=await extract_boxscore(data,file.content_type)
+    except VisionError as exc:
+        raise HTTPException(503,str(exc))
+    except Exception:
+        raise HTTPException(502,"Vision extraction failed")
     token=str(uuid.uuid4())
     TEMP.mkdir(parents=True,exist_ok=True)
-    (TEMP/(token+".json")).write_text(json.dumps({"game_id":game_id,"rows":[]}))
-    return {"preview_id":token,"game_id":game_id,"rows":[],
-            "message":"Image accepted. Vision provider not configured; enter extracted rows for review."}
+    rows=[]
+    for team in extracted.get("teams",[]):
+        for player in team.get("players",[]):
+            rows.append({**player,"team_name":team.get("name"),"player_id":None,
+                         "team_id":None})
+    (TEMP/(token+".json")).write_text(json.dumps({"game_id":game_id,"rows":rows}))
+    return {"preview_id":token,"game_id":game_id,"rows":rows,
+            "teams":extracted.get("teams",[]),"warnings":extracted.get("warnings",[]),
+            "mismatches":validate_rows(rows),
+            "message":"Review player and team matches before confirmation."}
 
 class Confirmation(BaseModel):
     preview_id:str
