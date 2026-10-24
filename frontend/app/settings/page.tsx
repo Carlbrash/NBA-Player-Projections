@@ -1,1 +1,1 @@
-export default function Settings(){return <main><h1>Settings & API usage</h1><div className="panel">Backfill and daily updates remain disabled pending integration tests. API credentials must stay server-side.</div></main>}
+import SettingsClient from "./SettingsClient";export default function Settings(){return <SettingsClient/>}
